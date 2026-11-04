@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#7c4dff">
+  <link rel="manifest" href="/manifest.json">
+  <title>Айрис</title>
+  <style>
+    /* ===== Цвета. Меняйте здесь, чтобы поменять весь вид ===== */
+    :root {
+      --bg1: #f3ecff;
+      --bg2: #e3efff;
+      --surface: #ffffff;
+      --text: #1f1b2e;
+      --muted: #6b6685;
+      --bot-bg: #ffffff;
+      --border: #e3dcf5;
+      --accent1: #7c4dff;
+      --accent2: #b066ff;
+      --error: #c01c28;
+      --shadow: 0 4px 18px rgba(80, 50, 160, 0.12);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg1: #14101f;
+        --bg2: #1a1736;
+        --surface: #221c3a;
+        --text: #eee9ff;
+        --muted: #a59fc4;
+        --bot-bg: #2a2347;
+        --border: #3a3260;
+        --error: #ff7b86;
+        --shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: var(--text);
+      background: linear-gradient(160deg, var(--bg1), var(--bg2)) fixed;
+    }
+
+    button { font-family: inherit; cursor: pointer; }
+
+    /* ===== Экран входа ===== */
+    #login {
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 28px 24px;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+    .avatar {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 12px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      font-weight: 700;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+    }
+    .card h1 { margin: 0 0 6px; font-size: 22px; }
+    .card p { margin: 0 0 18px; color: var(--muted); }
+    #loginForm { display: flex; flex-direction: column; gap: 10px; }
+    #loginError { color: var(--error); margin-top: 12px; min-height: 1.2em; font-size: 14px; }
+
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 16px;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent1); }
+
+    .primary {
+      padding: 12px 18px;
+      font-size: 16px;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+    }
+    .primary:disabled { opacity: 0.5; cursor: default; }
+
+    /* ===== Экран чата ===== */
+    #app {
+      max-width: 720px;
+      height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      padding-top: calc(12px + env(safe-area-inset-top));
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header .avatar { margin: 0; width: 44px; height: 44px; font-size: 20px; flex-shrink: 0; }
+    .title { flex: 1; min-width: 0; }
+    .title strong { display: block; font-size: 17px; }
+    #status {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #status.busy { color: var(--accent1); }
+    .small {
+      padding: 6px 10px;
+      font-size: 13px;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .small:hover { color: var(--text); }
+        .small.on {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+    }
+
+    #log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      animation: pop 0.2s ease-out;
+    }
+    .msg.user {
+      align-self: flex-end;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+      border-bottom-right-radius: 6px;
+    }
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--bot-bg);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 6px;
+    }
+    @keyframes pop {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Индикатор «печатает» */
+    .typing { display: flex; gap: 5px; align-items: center; padding: 14px 16px; }
+    .typing span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent1);
+      opacity: 0.4;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30%           { transform: translateY(-6px); opacity: 1; }
+    }
+
+    #form {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    #form input { border-radius: 22px; }
+    #send {
+      width: 46px;
+      height: 46px;
+      flex-shrink: 0;
+      padding: 0;
+      font-size: 18px;
+      border-radius: 50%;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Экран входа -->
+  <div id="login" hidden>
+    <div class="card">
+      <div class="avatar">А</div>
+      <h1>Привет! Я Айрис.</h1>
+      <p>Скажи, кто ты и какая у нас кодовая фраза.</p>
+      <form id="loginForm">
+        <input id="name" placeholder="Твоё имя" autocomplete="username">
+        <input id="phrase" type="password" placeholder="Кодовая фраза" autocomplete="current-password">
+        <button class="primary">Войти</button>
+      </form>
+      <div id="loginError"></div>
+    </div>
+  </div>
+
+  <!-- Экран чата -->
+  <div id="app" hidden>
+    <header>
+      <div class="avatar">А</div>
+      <div class="title">
+        <strong>Айрис</strong>
+        <span id="status"></span>
+      </div>
+      <button id="swear" class="small" type="button">Мат: выкл</button>
+      <button id="clear" class="small" type="button">Очистить</button>
+      <button id="logout" class="small" type="button">Выйти</button>
+    </header>
+    <div id="log"></div>
+    <form id="form">
+      <input id="text" placeholder="Напишите сообщение..." autocomplete="off">
+      <button id="send" class="primary" aria-label="Отправить">➤</button>
+    </form>
+  </div>
+
+  <script>
+    const TOKEN_KEY = "auth-token";
+    const NAME_KEY = "auth-name";
+    const MAX_MESSAGES = 100;
+
+    const loginBox = document.getElementById("login");
+    const appBox = document.getElementById("app");
+    const loginForm = document.getElementById("loginForm");
+    const nameInput = document.getElementById("name");
+    const phraseInput = document.getElementById("phrase");
+    const loginError = document.getElementById("loginError");
+    const statusEl = document.getElementById("status");
+    const log = document.getElementById("log");
+    const form = document.getElementById("form");
+    const input = document.getElementById("text");
+    const sendBtn = document.getElementById("send");
+    const clearBtn = document.getElementById("clear");
+    const logoutBtn = document.getElementById("logout");
+    const swearBtn = document.getElementById("swear");
+
+    let token = null;
+    let userName = null;
+    let chatHistory = [];
+    let waiting = false;
+    let typingEl = null;
+
+    try {
+      token = localStorage.getItem(TOKEN_KEY);
+      userName = localStorage.getItem(NAME_KEY);
+    } catch (err) {}
+
+    // --- Сохранение переписки (у каждого человека своя) ---
+
+    function storageKey() { return "chat-history:" + userName; }
+
+    function loadHistory() {
+      try {
+        const saved = localStorage.getItem(storageKey());
+        return saved ? JSON.parse(saved) : [];
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveHistory() {
+      if (chatHistory.length > MAX_MESSAGES) {
+        chatHistory.splice(0, chatHistory.length - MAX_MESSAGES);
+      }
+      while (chatHistory.length > 0 && chatHistory[0].role !== "user") {
+        chatHistory.shift();
+      }
+      try {
+        localStorage.setItem(storageKey(), JSON.stringify(chatHistory));
+      } catch (err) {}
+    }
+
+    // --- Сообщения и индикатор ожидания ---
+
+    function removeTyping() {
+      if (typingEl) {
+        typingEl.remove();
+        typingEl = null;
+      }
+    }
+
+    function addMessage(cls, text) {
+      removeTyping(); // точки всегда исчезают перед новым сообщением
+      const div = document.createElement("div");
+      div.className = "msg " + cls;
+      div.textContent = text;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setStatusIdle() {
+      statusEl.classList.remove("busy");
+      statusEl.textContent = "ИИ-помощница · " + userName;
+    }
+
+    function setWaiting(on) {
+      waiting = on;
+      sendBtn.disabled = on;
+      if (on) {
+        statusEl.classList.add("busy");
+        statusEl.textContent = "печатает…";
+        typingEl = document.createElement("div");
+        typingEl.className = "msg bot typing";
+        typingEl.innerHTML = "<span></span><span></span><span></span>";
+        log.appendChild(typingEl);
+        log.scrollTop = log.scrollHeight;
+      } else {
+        removeTyping();
+        setStatusIdle();
+      }
+    }
+
+    // --- Экраны ---
+
+    function showLogin() {
+      appBox.hidden = true;
+      loginBox.hidden = false;
+      phraseInput.value = "";
+    }
+
+    function showApp() {
+      loginBox.hidden = true;
+      appBox.hidden = false;
+      setStatusIdle();
+      log.innerHTML = "";
+      chatHistory = loadHistory();
+      swearOn = loadSwear();
+      updateSwearButton();
+      for (const m of chatHistory) {
+        addMessage(m.role === "user" ? "user" : "bot", m.content);
+      }
+    }
+
+    function forgetLogin() {
+      token = null;
+      userName = null;
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(NAME_KEY);
+      } catch (err) {}
+    }
+
+    // --- Вход ---
+
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      loginError.textContent = "";
+      try {
+        const res = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: nameInput.value, phrase: phraseInput.value }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          loginError.textContent = data.error;
+          return;
+        }
+        token = data.token;
+        userName = data.name;
+        try {
+          localStorage.setItem(TOKEN_KEY, token);
+          localStorage.setItem(NAME_KEY, userName);
+        } catch (err) {}
+        showApp();
+      } catch (err) {
+        loginError.textContent = "Нет связи с сервером.";
+      }
+    });
+
+    logoutBtn.addEventListener("click", () => {
+      forgetLogin();
+      showLogin();
+    });
+
+    // --- Отправка сообщения ---
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (waiting) return;
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+
+      addMessage("user", text);
+      chatHistory.push({ role: "user", content: text });
+      setWaiting(true);
+
+      try {
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token,
+          },
+          body: JSON.stringify({ messages: chatHistory, swearing: swearOn }),
+        });
+        const data = await res.json();
+
+        if (res.status === 401) {
+          // Пропуск устарел (например, сервер перезапускался)
+          chatHistory.pop();
+          saveHistory();
+          forgetLogin();
+          loginError.textContent = "Сессия закончилась, войдите снова.";
+          showLogin();
+          return;
+        }
+
+        if (!res.ok) {
+          addMessage("bot", data.reply);
+          chatHistory.pop();
+          saveHistory();
+          return;
+        }
+
+        addMessage("bot", data.reply);
+        chatHistory.push({ role: "assistant", content: data.reply });
+        saveHistory();
+      } catch (err) {
+        addMessage("bot", "Нет связи с сервером.");
+        chatHistory.pop();
+        saveHistory();
+      } finally {
+        setWaiting(false);
+        input.focus();
+      }
+    });
+
+    clearBtn.addEventListener("click", () => {
+      if (!confirm("Удалить всю переписку?")) return;
+      chatHistory = [];
+      log.innerHTML = "";
+      try { localStorage.removeItem(storageKey()); } catch (err) {}
+    });
+
+        // --- Режим мата (включается кнопкой, у каждого человека свой) ---
+
+    let swearOn = false;
+
+    function loadSwear() {
+      try {
+        return localStorage.getItem("swear:" + userName) === "1";
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function updateSwearButton() {
+      swearBtn.textContent = swearOn ? "Мат: вкл" : "Мат: выкл";
+      swearBtn.classList.toggle("on", swearOn);
+    }
+
+    swearBtn.addEventListener("click", () => {
+      if (!swearOn && !confirm("Включить мат? Айрис будет ругаться по-дружески. Только для взрослых.")) return;
+      swearOn = !swearOn;
+      try { localStorage.setItem("swear:" + userName, swearOn ? "1" : "0"); } catch (err) {}
+      updateSwearButton();
+    });
+    // --- Запуск ---
+
+    if (token && userName) showApp();
+    else showLogin();
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
