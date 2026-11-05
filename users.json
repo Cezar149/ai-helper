@@ -10,5 +10,11 @@
     "salt": "9df7d1a3d50ba53eaa6c5878f0f3fbef",
     "hash": "d0b0c2e47c2217401d79e2a375819ee60d1330c3567f61180058e2b5d4eac12f7d6eb3fbc927b93c4b7b3b439ddbd15913af2788e2656ab88666be78afe7e240",
     "note": "Друг Одногрупник Кирилла.Любит славянскую мифологию и лес."
+  },
+  {
+    "name": "Денис",
+    "salt": "cdcbd780cddaf7bf02b7e0e25213d90b",
+    "hash": "e7abcace2202ace7bd442a0796b43fde440c5264a082846535e81dd76f3f61412ec7201fc5df06849460f43390132d12a1bfed0696fa7420d799ebf7f6e4d1ea",
+    "note": "Друг Кирилла. Любит космос и вселеную WarHammer 40.000."
   }
 ]
