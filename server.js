@@ -26,7 +26,11 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 // --- Настройки моделей ---
 // Название модели можно поменять без правки кода: переменная GEMINI_MODEL
 const TEXT_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const IMAGES_PER_HOUR = 15; // лимит картинок на пользователя в час
+
+// --- Лимиты по умолчанию (для каждого человека можно задать свои в users.json) ---
+const DEFAULT_DAILY_MESSAGES = Number(process.env.DAILY_MESSAGES) || 100; // сообщений в день
+const DEFAULT_IMAGES_PER_HOUR = 15; // картинок в час
+const OWNER_IMAGES_PER_HOUR = 100; // картинок в час у владельца
 
 // Слова-триггеры для вызова рисования
 const DRAW_REQUEST = /(нарису|нарисов|сгенерир|созда\S*\s+(?:мне\s+)?(?:картин|изображ|фот|арт|рисун|иллюстр)|сдела\S*\s+(?:мне\s+)?(?:картин|изображ|фот|арт|рисун|иллюстр)|покаж\S*\s+(?:мне\s+)?(?:картин|рисун)|draw|generate\s+(?:an?\s+)?(?:image|picture|photo))/i;
@@ -203,6 +207,151 @@ function getUser(req) {
 // Проверка, что сервер жив (нужна хостингу)
 app.get("/health", (req, res) => res.send("ok"));
 
+// --- Привилегии и учёт использования ---
+// Права задаются в users.json у каждого человека:
+//   "admin": true            — владелец (команды, без дневного лимита, больше картинок)
+//   "dailyMessages": 50      — свой лимит сообщений в день
+//   "imagesPerHour": 3       — свой лимит картинок в час
+//   "canDraw": false         — запретить рисование
+//   "noSwear": true          — запретить мат
+//   "blocked": true          — закрыть доступ совсем
+// Счётчики и блокировки командами хранятся в памяти: при перезапуске сервера сбрасываются.
+
+const startedAt = Date.now();
+let modelOverride = null; // меняется командой /модель
+const blocked = new Set(); // меняется командой /блок (имена в нижнем регистре)
+const usage = new Map(); // имя -> { day, messages, images, lastSeen }
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+function getUsage(name) {
+  let u = usage.get(name);
+  if (!u || u.day !== today()) {
+    u = { day: today(), messages: 0, images: 0, lastSeen: u?.lastSeen || 0 };
+    usage.set(name, u);
+  }
+  return u;
+}
+
+function isBlocked(user) {
+  return !user.admin && (user.blocked === true || blocked.has(user.name.toLowerCase()));
+}
+
+function pickModel(user) {
+  return modelOverride || (user.admin && process.env.OWNER_MODEL) || TEXT_MODEL;
+}
+
+function ago(ts) {
+  if (!ts) return "нет данных с последнего запуска";
+  const min = Math.round((Date.now() - ts) / 60000);
+  if (min < 1) return "только что";
+  if (min < 60) return `${min} мин назад`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h} ч назад`;
+  return `${Math.floor(h / 24)} дн назад`;
+}
+
+function uptimeText() {
+  const min = Math.floor((Date.now() - startedAt) / 60000);
+  if (min < 60) return `${min} мин`;
+  return `${Math.floor(min / 60)} ч ${min % 60} мин`;
+}
+
+function findUser(name) {
+  const wanted = String(name).trim().toLowerCase();
+  return loadUsers().find((u) => u.name.toLowerCase() === wanted);
+}
+
+// Команды владельца. Выполняются сервером и до модели не доходят
+function handleAdminCommand(text) {
+  const [cmdRaw, ...rest] = text.trim().split(/\s+/);
+  const cmd = cmdRaw.toLowerCase();
+  const arg = rest.join(" ").trim();
+
+  if (cmd === "/помощь" || cmd === "/help") {
+    return [
+      "Команды владельца:",
+      "/статус — состояние сервера",
+      "/кто — все люди и их активность сегодня",
+      "/блок Имя — закрыть человеку доступ (до перезапуска сервера)",
+      "/разблок Имя — вернуть доступ",
+      "/модель — показать текущую модель",
+      "/модель название — сменить модель для всех (до перезапуска)",
+      "/модель сброс — вернуть модель по умолчанию",
+    ].join("\n");
+  }
+
+  if (cmd === "/статус") {
+    const users = loadUsers();
+    let total = 0;
+    for (const u of users) total += getUsage(u.name).messages;
+    return [
+      `Сервер работает: ${uptimeText()}`,
+      `Модель: ${modelOverride || TEXT_MODEL}${modelOverride ? " (выбрана командой)" : ""}`,
+      `Модель владельца: ${process.env.OWNER_MODEL || "та же"}`,
+      `Прокси: ${PROXY_URL ? "включён" : "нет"}`,
+      `Людей в списке: ${users.length}`,
+      `Сообщений сегодня (всего): ${total}`,
+    ].join("\n");
+  }
+
+  if (cmd === "/кто") {
+    const lines = loadUsers().map((u) => {
+      const s = getUsage(u.name);
+      const tags = [u.admin ? "владелец" : null, isBlocked(u) ? "заблокирован" : null].filter(Boolean);
+      const tagText = tags.length ? ` (${tags.join(", ")})` : "";
+      return `• ${u.name}${tagText} — сообщений сегодня: ${s.messages}, картинок: ${s.images}, активность: ${ago(s.lastSeen)}`;
+    });
+    return lines.length ? lines.join("\n") : "Список людей пуст.";
+  }
+
+  if (cmd === "/блок" || cmd === "/разблок") {
+    if (!arg) return `Напиши имя: ${cmd} Имя`;
+    const target = findUser(arg);
+    if (!target) return `Не найден человек с именем «${arg}».`;
+
+    if (cmd === "/блок") {
+      if (target.admin) return "Владельца заблокировать нельзя.";
+      blocked.add(target.name.toLowerCase());
+      return `«${target.name}» заблокирован до перезапуска сервера. Чтобы закрыть доступ насовсем, добавь "blocked": true в его запись в users.json и обнови USERS_JSON на Render.`;
+    }
+
+    blocked.delete(target.name.toLowerCase());
+    return target.blocked === true
+      ? `Ручная блокировка снята, но в users.json у «${target.name}» стоит "blocked": true, поэтому доступ остаётся закрытым.`
+      : `«${target.name}» снова может писать.`;
+  }
+
+  if (cmd === "/модель") {
+    if (!arg) return `Сейчас используется: ${modelOverride || TEXT_MODEL}${modelOverride ? " (выбрана командой)" : ""}.`;
+    if (arg.toLowerCase() === "сброс") {
+      modelOverride = null;
+      return `Возвращена модель по умолчанию: ${TEXT_MODEL}.`;
+    }
+    if (!/^[A-Za-z0-9._-]{3,60}$/.test(arg)) {
+      return "Название модели должно состоять из латинских букв, цифр, точек и дефисов.";
+    }
+    modelOverride = arg;
+    return `Модель для всех сменена на ${arg} (до перезапуска сервера). Если пойдут ошибки, верни прежнюю: /модель сброс`;
+  }
+
+  return "Не знаю такой команды. Список: /помощь";
+}
+
+// Убирает из истории команды владельца и ответы на них, чтобы они не попадали в память модели
+function withoutCommands(messages) {
+  const out = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === "user" && String(m.content || "").trim().startsWith("/")) {
+      if (messages[i + 1]?.role === "assistant") i++;
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 // --- Обработка медиа и генерация картинок ---
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const MAX_IMAGE_B64 = 8_000_000;
@@ -219,16 +368,17 @@ function buildContents(messages) {
 }
 
 const imageLog = new Map();
-function canGenerateImage(name) {
+function canGenerateImage(name, limit) {
   const hourAgo = Date.now() - 60 * 60 * 1000;
   const list = (imageLog.get(name) || []).filter((t) => t > hourAgo);
   imageLog.set(name, list);
-  return list.length < IMAGES_PER_HOUR;
+  return list.length < limit;
 }
 
 function noteImage(name) {
   if (!imageLog.has(name)) imageLog.set(name, []);
   imageLog.get(name).push(Date.now());
+  getUsage(name).images++;
 }
 
 // Бесплатная генерация через Flux (Pollinations)
@@ -265,11 +415,11 @@ async function generateImage(prompt) {
   return null;
 }
 
-async function tryDraw(userName, prompt) {
+async function tryDraw(userName, prompt, hourlyLimit) {
   if (!prompt || typeof prompt !== "string") {
     return { image: null, message: "Ошибка: пустое описание картинки." };
   }
-  if (!canGenerateImage(userName)) {
+  if (!canGenerateImage(userName, hourlyLimit)) {
     return { image: null, message: "Лимит генераций в этот час исчерпан. Предложи продолжить беседу." };
   }
   try {
@@ -313,28 +463,57 @@ app.post("/chat", async (req, res) => {
     return res.status(401).json({ reply: "Нужно войти заново." });
   }
 
+  if (isBlocked(user)) {
+    return res.status(403).json({ reply: "Доступ для тебя закрыт владельцем." });
+  }
+
+  const stats = getUsage(user.name);
+  stats.lastSeen = Date.now();
+
+  const rawMessages = Array.isArray(req.body.messages) ? req.body.messages : [];
+  const lastMessage = rawMessages[rawMessages.length - 1] || {};
+
+  // Команды владельца: выполняются сервером, до модели не доходят
+  if (user.admin && lastMessage.role === "user" && String(lastMessage.content || "").trim().startsWith("/")) {
+    return res.json({ reply: handleAdminCommand(String(lastMessage.content)), image: null });
+  }
+
+  // Дневной лимит сообщений (у владельца по умолчанию нет)
+  const dailyLimit = user.dailyMessages ?? (user.admin ? Infinity : DEFAULT_DAILY_MESSAGES);
+  if (stats.messages >= dailyLimit) {
+    return res.status(429).json({ reply: `На сегодня лимит сообщений исчерпан (${dailyLimit}). Приходи завтра!` });
+  }
+  stats.messages++;
+
   try {
-    const contents = buildContents(req.body.messages || []);
+    const messages = user.admin ? withoutCommands(rawMessages) : rawMessages;
+    const contents = buildContents(messages);
     const wantsSwearing = req.body.swearing === true && user.noSwear !== true;
+    const canDraw = user.canDraw !== false;
+    const imagesLimit = user.imagesPerHour ?? (user.admin ? OWNER_IMAGES_PER_HOUR : DEFAULT_IMAGES_PER_HOUR);
+    const model = pickModel(user);
 
     const systemInstruction =
       SYSTEM_PROMPT +
       `\n\nСобеседник: ${user.name}.` +
+      (user.admin ? `\nЭтот собеседник — владелец проекта.` : "") +
       (user.note ? `\nЗаметка о нём: ${user.note}` : "") +
       `\n\nСейчас у собеседника: ${nowText(req.body.timeZone)}.` +
       `\nИспользуй это, когда спрашивают про время, дату или день недели, и когда это важно для ответа (например, сколько осталось до праздника или какое сейчас время суток). Без необходимости время не упоминай. Твои знания могли устареть: о событиях, которые могли произойти после обучения, говори осторожно.` +
+      (canDraw
+        ? ""
+        : `\n\nУ этого собеседника рисование отключено владельцем: инструмента draw_image у тебя сейчас нет. Если просит картинку, шутливо объясни, что рисовать тебе не разрешили.`) +
       `\n\n` +
       (wantsSwearing ? SWEAR_ON : SWEAR_OFF);
 
-    const config = { systemInstruction, tools: [drawTool] };
+    const config = { systemInstruction, ...(canDraw ? { tools: [drawTool] } : {}) };
 
     // Проверяем, просит ли пользователь нарисовать картинку
-    const lastMessage = req.body.messages?.[req.body.messages.length - 1] || {};
-    const forceDraw = DRAW_REQUEST.test(String(lastMessage.content || "")) && !lastMessage.image;
+    const forceDraw = canDraw && DRAW_REQUEST.test(String(lastMessage.content || "")) && !lastMessage.image;
 
     // 1. Первый запрос к модели
     const response = await callGeminiWithRetry({
-      model: TEXT_MODEL,
+      model,
       contents,
       config: forceDraw
         ? {
@@ -359,7 +538,7 @@ app.post("/chat", async (req, res) => {
         let resultMessage;
         if (call.name === "draw_image" && !drawn) {
           drawn = true;
-          const outcome = await tryDraw(user.name, call.args?.prompt);
+          const outcome = await tryDraw(user.name, call.args?.prompt, imagesLimit);
           image = outcome.image;
           resultMessage = outcome.message;
         } else {
@@ -383,7 +562,7 @@ app.post("/chat", async (req, res) => {
         followUpContents.push({ role: "user", parts: responseParts });
 
         const followUp = await callGeminiWithRetry({
-          model: TEXT_MODEL,
+          model,
           contents: followUpContents,
           config,
         });
