@@ -558,7 +558,11 @@
             "Content-Type": "application/json",
             "Authorization": "Bearer " + token,
           },
-          body: JSON.stringify({ messages, swearing: swearOn }),
+          body: JSON.stringify({
+            messages,
+            swearing: swearOn,
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }),
         });
         const data = await res.json();
 

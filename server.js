@@ -289,6 +289,23 @@ async function tryDraw(userName, prompt) {
   }
 }
 
+// --- Текущие дата и время для Айрис ---
+// timeZone приходит из браузера пользователя, например "Europe/Berlin"
+function nowText(timeZone) {
+  let tz = typeof timeZone === "string" ? timeZone : "";
+  try {
+    new Intl.DateTimeFormat("ru-RU", { timeZone: tz }); // проверка, что пояс настоящий
+  } catch {
+    tz = process.env.TIMEZONE || "UTC"; // запасной вариант
+  }
+  const text = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: tz,
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(new Date());
+  return `${text} (часовой пояс ${tz})`;
+}
+
 // --- Основной эндпоинт чата ---
 app.post("/chat", async (req, res) => {
   const user = getUser(req);
@@ -304,6 +321,8 @@ app.post("/chat", async (req, res) => {
       SYSTEM_PROMPT +
       `\n\nСобеседник: ${user.name}.` +
       (user.note ? `\nЗаметка о нём: ${user.note}` : "") +
+      `\n\nСейчас у собеседника: ${nowText(req.body.timeZone)}.` +
+      `\nИспользуй это, когда спрашивают про время, дату или день недели, и когда это важно для ответа (например, сколько осталось до праздника или какое сейчас время суток). Без необходимости время не упоминай. Твои знания могли устареть: о событиях, которые могли произойти после обучения, говори осторожно.` +
       `\n\n` +
       (wantsSwearing ? SWEAR_ON : SWEAR_OFF);
 
