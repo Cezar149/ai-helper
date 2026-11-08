@@ -70,7 +70,8 @@ const COMMON_RULES = `Честность:
 - Никогда не раскрывай пароли и кодовые фразы.
 
 Оформление:
-- Пиши обычным текстом без Markdown-разметки: без звёздочек, решёток и обратных кавычек. Списки делай простыми строками с дефисом или цифрой.
+- Можно использовать простую разметку: **жирный текст**, списки (строки с дефисом или цифрой), короткий код в одинарных обратных кавычках и блоки кода в тройных обратных кавычках.
+- Не используй таблицы, заголовки с решётками и HTML. В обычной беседе лучше писать простым текстом, без лишнего оформления.
 
 Фото и картинки:
 - Ты можешь просматривать фото от пользователя и описывать их. Не пытайся угадывать имена реальных людей по лицу.
@@ -263,6 +264,8 @@ app.get("/personas", (req, res) => {
       name: p.name,
       tagline: p.tagline,
       avatar: p.avatar,
+      gender: p.gender,
+      voice: p.voice || null,
     })),
   });
 });
@@ -599,7 +602,80 @@ function nowText(timeZone) {
   return `${text} (часовой пояс ${tz})`;
 }
 
-// --- Основной эндпоинт чата ---
+// --- Знакомство личностей друг с другом ---
+// Рассказывает личности, кто ещё есть в приложении (только те, кто доступен этому человеку)
+function othersText(persona, user) {
+  const others = allowedPersonas(user).filter((p) => p.id !== persona.id);
+  if (!others.length) return "";
+
+  const lines = others.map((p) => {
+    const view = persona.views?.[p.id];
+    return (
+      `- ${p.name} (${p.tagline})\n` +
+      `  Кто это: ${p.about || p.tagline}\n` +
+      (view ? `  Твоё отношение: ${view}` : "  Твоё отношение: нейтральное")
+    );
+  });
+
+  return (
+    `\n\nДругие личности в этом приложении (ты их знаешь):\n` +
+    lines.join("\n") +
+    `\n\nПравила:\n` +
+    `- Ты можешь рассказывать о них, высказывать своё мнение, шутить, советовать, к кому из них обратиться. Опирайся на описания выше и не выдумывай существенных фактов о них.\n` +
+    `- Ты не можешь на самом деле связаться с ними, передать им сообщение или узнать, о чём собеседник говорил с ними: у каждой личности своя отдельная переписка. Не придумывай, что они сказали или сделали.\n` +
+    `- Если собеседник хочет поговорить с другой личностью, подскажи: нужно нажать на имя вверху экрана и выбрать её.\n` +
+    `- Когда речь заходит о других, ты остаёшься собой: твой характер и манера речи не меняются.`
+  );
+}
+
+// --- Ответ модели потоком ---
+// Отправляет кусочки текста в onText по мере получения.
+// Возвращает { text, calls, parts }: полный текст, вызовы инструментов и части ответа
+async function streamGemini(params, onText, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let started = false;
+    try {
+      const stream = await ai.models.generateContentStream(params);
+      let text = "";
+      const calls = [];
+      const parts = [];
+
+      for await (const chunk of stream) {
+        started = true;
+        const cparts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const p of cparts) {
+          parts.push(p);
+          if (p.functionCall) calls.push(p.functionCall);
+        }
+        const delta = cparts
+          .filter((p) => typeof p.text === "string" && !p.thought)
+          .map((p) => p.text)
+          .join("");
+        if (delta) {
+          text += delta;
+          onText(delta);
+        }
+      }
+      return { text, calls, parts };
+    } catch (err) {
+      const retryable =
+        err?.status === 503 ||
+        err?.message?.includes("503") ||
+        err?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+        err?.message?.includes("fetch failed");
+
+      // Повторяем только если ответ ещё не начал приходить
+      if (retryable && !started && attempt < maxRetries) {
+        const delay = attempt * 2000;
+        console.warn(`[Gemini] Ошибка ${err.status || err.code}. Повтор ${attempt}/${maxRetries} через ${delay / 1000} сек...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 app.post("/chat", async (req, res) => {
   const user = getUser(req);
   if (!user) {
@@ -642,6 +718,22 @@ app.post("/chat", async (req, res) => {
   }
   stats.messages++;
 
+  // --- Дальше ответ идёт потоком: по одной строке JSON на событие ---
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  let total = ""; // весь отправленный текст
+  const send = (obj) => {
+    if (!res.writableEnded) res.write(JSON.stringify(obj) + "\n");
+  };
+  const sendText = (d) => {
+    if (!d) return;
+    total += d;
+    send({ t: "text", d });
+  };
+
   try {
     const contents = buildContents(withoutCommands(rawMessages, user));
     const wantsSwearing = req.body.swearing === true && user.noSwear !== true;
@@ -650,7 +742,8 @@ app.post("/chat", async (req, res) => {
     const model = pickModel(user);
 
     const systemInstruction =
-       buildSystemPrompt(persona) +
+      buildSystemPrompt(persona) +
+      othersText(persona, user) +
       `\n\nСобеседник: ${user.name}.` +
       (user.admin ? `\nЭтот собеседник — владелец проекта.` : "") +
       (user.note ? `\nЗаметка о нём: ${user.note}` : "") +
@@ -675,41 +768,44 @@ app.post("/chat", async (req, res) => {
     if (canDraw) decls.push(drawDecl);
     const config = { systemInstruction, ...(decls.length ? { tools: [{ functionDeclarations: decls }] } : {}) };
 
-    // Проверяем, просит ли пользователь нарисовать картинку
-      const forceDraw = canDraw && DRAW_REQUEST.test(lastText) && !lastMessage.image && !lastMessage.audio;
+    // Если человек явно просит нарисовать, заставляем вызвать инструмент
+    const forceDraw = canDraw && DRAW_REQUEST.test(lastText) && !lastMessage.image && !lastMessage.audio;
 
-    // 1. Первый запрос к модели
-    const response = await callGeminiWithRetry({
-      model,
-      contents,
-      config: forceDraw
-        ? {
-            ...config,
-            toolConfig: {
-              functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["draw_image"] },
-            },
-          }
-        : config,
-    });
+    // 1. Первый запрос: текст уходит на экран по мере получения
+    const first = await streamGemini(
+      {
+        model,
+        contents,
+        config: forceDraw
+          ? {
+              ...config,
+              toolConfig: {
+                functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["draw_image"] },
+              },
+            }
+          : config,
+      },
+      sendText
+    );
 
-    const calls = response.functionCalls || [];
-    let reply = "";
     let image = null;
     let drawn = false;
 
     // 2. Если модель вызвала инструменты (рисовать или запомнить)
-    if (calls.length > 0) {
+    if (first.calls.length > 0) {
       const responseParts = [];
 
-      for (const call of calls) {
+      for (const call of first.calls) {
         let resultMessage;
 
         if (call.name === "draw_image" && canDraw) {
           if (!drawn) {
             drawn = true;
+            send({ t: "status", d: "рисует картинку…" });
             const outcome = await tryDraw(user.name, call.args?.prompt, imagesLimit);
             image = outcome.image;
             resultMessage = outcome.message;
+            send({ t: "status", d: "печатает…" });
           } else {
             resultMessage = "За один раз создается только одно изображение.";
           }
@@ -717,7 +813,7 @@ app.post("/chat", async (req, res) => {
           const added = addFact(memory, call.args?.fact);
           if (added) memoryChanged = true;
           resultMessage = added
-            ? "Факт сохранён. Не нужно подробно сообщать об этом, просто продолжай разговор (можно коротко подтвердить, если человек сам просил запомнить)."
+            ? "Факт сохранён. Просто продолжай разговор и не повторяй то, что уже сказал (можно коротко подтвердить, если человек сам просил запомнить)."
             : "Такой факт уже есть или он пустой, ничего не сохранено.";
         } else {
           resultMessage = "Такого инструмента сейчас нет.";
@@ -732,48 +828,48 @@ app.post("/chat", async (req, res) => {
         });
       }
 
-      // 3. Отдаем результат инструментов обратно Айрис, чтобы она дала текстовый ответ
+      // Если до вызова инструмента уже что-то было сказано, продолжение отделяем пустой строкой
+      if (total.trim()) sendText("\n\n");
+
+      // 3. Отдаём результат инструментов обратно, ответ снова идёт потоком
       try {
-        const modelCandidate = response.candidates?.[0]?.content;
-        const followUpContents = [...contents];
-        if (modelCandidate) followUpContents.push(modelCandidate);
-        followUpContents.push({ role: "user", parts: responseParts });
-
-        const followUp = await callGeminiWithRetry({
-          model,
-          contents: followUpContents,
-          config,
-        });
-
-        const cand = followUp.candidates?.[0]?.content;
-        reply = cand?.parts?.map((p) => p.text || "").join("") || "";
+        await streamGemini(
+          {
+            model,
+            contents: [...contents, { role: "model", parts: first.parts }, { role: "user", parts: responseParts }],
+            config,
+          },
+          sendText
+        );
       } catch (followUpErr) {
         console.error("[Gemini] Ошибка ответа после инструмента:", followUpErr.message);
-        reply = image
-          ? "Готово, держи твою картинку!"
-          : drawn
-          ? "Не получилось закончить рисунок, попробуй позже."
-          : memoryChanged
-          ? g(persona, "Запомнила!", "Запомнил!")
-          : "";
       }
-    } else {
-      // Обычный текстовый ответ (без вызова инструментов)
-      const cand = response.candidates?.[0]?.content;
-      reply = cand?.parts?.map((p) => p.text || "").join("") || "";
+
+      if (!total.trim()) {
+        sendText(
+          image
+            ? "Готово, держи твою картинку!"
+            : drawn
+            ? "Не получилось закончить рисунок, попробуй позже."
+            : memoryChanged
+            ? g(persona, "Запомнила!", "Запомнил!")
+            : ""
+        );
+      }
     }
 
-    if (!reply) {
-      reply = image ? "Вот что получилось!" : "Что-то пошло не так, повтори ещё раз.";
+    if (!total.trim()) {
+      sendText(image ? "Вот что получилось!" : "Что-то пошло не так, повтори ещё раз.");
     }
 
-    res.json({ reply, image, ...(memoryChanged ? { memory } : {}) });
+    send({ t: "done", image, ...(memoryChanged ? { memory } : {}) });
+    res.end();
   } catch (err) {
     console.error("[Сервер] Критическая ошибка:", err);
-    if (err.status === 429) {
-      return res.status(429).json({ reply: "Слишком частые запросы, передохни минутку." });
-    }
-    res.status(500).json({ reply: "Сервер споткнулся, попробуй ещё раз." });
+    const reply =
+      err.status === 429 ? "Слишком частые запросы, передохни минутку." : "Сервер споткнулся, попробуй ещё раз.";
+    send({ t: "error", reply });
+    res.end();
   }
 });
 

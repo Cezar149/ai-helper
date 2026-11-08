@@ -126,6 +126,7 @@
       flex-direction: column;
     }
     header {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -170,11 +171,34 @@
       border-radius: 10px;
     }
     .small:hover { color: var(--text); }
-    .small.on {
-      color: #fff;
-      border-color: transparent;
-      background: linear-gradient(135deg, var(--accent1), var(--accent2));
+    #menuBtn { font-size: 18px; line-height: 1; padding: 6px 12px; }
+
+    /* Меню: мат, озвучка, очистка, выход */
+    .menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 12px;
+      z-index: 5;
+      min-width: 220px;
+      padding: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
     }
+    .menu button {
+      display: block;
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 14px;
+      text-align: left;
+      color: var(--text);
+      background: none;
+      border: none;
+      border-radius: 10px;
+    }
+    .menu button:hover { background: var(--bg1); }
+    .menu button.on { color: var(--accent1); font-weight: 600; }
 
     #log {
       flex: 1;
@@ -189,7 +213,6 @@
       padding: 10px 14px;
       border-radius: 18px;
       line-height: 1.45;
-      white-space: pre-wrap;
       overflow-wrap: anywhere;
       animation: pop 0.2s ease-out;
     }
@@ -210,6 +233,7 @@
     .msg.user {
       align-self: flex-end;
       color: #fff;
+      white-space: pre-wrap;
       background: linear-gradient(135deg, var(--accent1), var(--accent2));
       border-bottom-right-radius: 6px;
     }
@@ -223,6 +247,54 @@
       from { opacity: 0; transform: translateY(6px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+
+    /* Оформление ответов (Markdown) */
+    .md:empty { display: none; }
+    .md p { margin: 0 0 8px; }
+    .md > :last-child { margin-bottom: 0; }
+    .md .md-h { font-weight: 700; }
+    .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
+    .md li { margin: 2px 0; }
+    .md a { color: var(--accent1); }
+    .md code {
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: rgba(127, 127, 127, 0.18);
+      border-radius: 6px;
+    }
+    .md pre {
+      position: relative;
+      margin: 0 0 8px;
+      padding: 10px 12px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.4;
+      background: rgba(127, 127, 127, 0.16);
+      border-radius: 12px;
+    }
+    .md pre code { padding: 0; background: none; white-space: pre; }
+    .copy {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .speak {
+      display: block;
+      margin: 6px 0 0 auto;
+      padding: 0 4px;
+      font-size: 14px;
+      background: none;
+      border: none;
+      opacity: 0.55;
+    }
+    .speak:hover { opacity: 1; }
 
     /* Индикатор «печатает» */
     .typing { display: flex; gap: 5px; align-items: center; padding: 14px 16px; }
@@ -360,9 +432,14 @@
           <span id="status"></span>
         </span>
       </button>
-      <button id="swear" class="small" type="button">Мат: выкл</button>
-      <button id="clear" class="small" type="button">Очистить</button>
-      <button id="logout" class="small" type="button">Выйти</button>
+      <button id="menuBtn" class="small" type="button" aria-label="Меню">⋯</button>
+
+      <div id="menu" class="menu" hidden>
+        <button id="swear" type="button">Мат: выкл</button>
+        <button id="tts" type="button">Озвучка: выкл</button>
+        <button id="clear" type="button">Очистить переписку</button>
+        <button id="logout" type="button">Выйти</button>
+      </div>
     </header>
 
     <div id="log"></div>
@@ -413,9 +490,12 @@
     const form = document.getElementById("form");
     const input = document.getElementById("text");
     const sendBtn = document.getElementById("send");
+    const menuBtn = document.getElementById("menuBtn");
+    const menu = document.getElementById("menu");
     const clearBtn = document.getElementById("clear");
     const logoutBtn = document.getElementById("logout");
     const swearBtn = document.getElementById("swear");
+    const ttsBtn = document.getElementById("tts");
     const attachBtn = document.getElementById("attach");
     const micBtn = document.getElementById("mic");
     const fileInput = document.getElementById("file");
@@ -433,7 +513,7 @@
     const pickerClose = document.getElementById("pickerClose");
 
     // Запасная личность, если список с сервера не пришёл
-    const FALLBACK_PERSONA = { id: "iris", name: "Айрис", tagline: "ИИ-помощница", avatar: "/avatar.png" };
+    const FALLBACK_PERSONA = { id: "iris", name: "Айрис", tagline: "ИИ-помощница", avatar: "/avatar.png", gender: "f" };
 
     let token = null;
     let userName = null;
@@ -442,7 +522,8 @@
     let typingEl = null;
     let pendingMedia = null; // вложение к следующему сообщению: фото или аудио
     let swearOn = false;
-    let memory = []; // долгая память об этом человеке (хранится в этом браузере, общая для всех личностей)
+    let ttsOn = false;
+    let memory = []; // долгая память об этом человеке (в этом браузере, общая для всех личностей)
     let personas = [FALLBACK_PERSONA];
     let defaultPersonaId = FALLBACK_PERSONA.id;
     let personaId = FALLBACK_PERSONA.id;
@@ -482,6 +563,213 @@
       } catch (err) {}
     }
 
+    // --- Оформление ответов: небольшой безопасный разбор Markdown ---
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    // Принимает уже экранированный текст строки
+    function inlineMd(escaped) {
+      return escaped
+        .split(/(`[^`\n]+`)/g)
+        .map((part, i) => {
+          if (i % 2 === 1) return "<code>" + part.slice(1, -1) + "</code>";
+          return part
+            .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
+            .replace(/(^|[^*\w])\*(\S(?:[^*\n]*?\S)?)\*(?![*\w])/g, "$1<em>$2</em>")
+            .replace(
+              /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+            );
+        })
+        .join("");
+    }
+
+    const BULLET = /^\s*[-*•]\s+/;
+    const NUMBERED = /^\s*\d+[.)]\s+/;
+
+    function renderMarkdown(text) {
+      const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+      let html = "";
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        // Блок кода (если закрывающих кавычек ещё нет, это идущий поток: показываем как есть)
+        if (/^```/.test(line)) {
+          const code = [];
+          i++;
+          while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+            code.push(lines[i]);
+            i++;
+          }
+          i++; // пропускаем закрывающую строку
+          html += "<pre><code>" + escapeHtml(code.join("\n")) + "</code></pre>";
+          continue;
+        }
+
+        // Заголовок показываем жирной строкой
+        const h = line.match(/^#{1,6}\s+(.*)$/);
+        if (h) {
+          html += '<p class="md-h">' + inlineMd(escapeHtml(h[1])) + "</p>";
+          i++;
+          continue;
+        }
+
+        // Списки
+        if (BULLET.test(line) || NUMBERED.test(line)) {
+          const ordered = NUMBERED.test(line);
+          const re = ordered ? NUMBERED : BULLET;
+          html += ordered ? "<ol>" : "<ul>";
+          while (i < lines.length && re.test(lines[i])) {
+            html += "<li>" + inlineMd(escapeHtml(lines[i].replace(re, ""))) + "</li>";
+            i++;
+          }
+          html += ordered ? "</ol>" : "</ul>";
+          continue;
+        }
+
+        if (!line.trim()) {
+          i++;
+          continue;
+        }
+
+        // Абзац: подряд идущие обычные строки
+        const para = [];
+        while (
+          i < lines.length &&
+          lines[i].trim() &&
+          !/^```/.test(lines[i]) &&
+          !/^#{1,6}\s/.test(lines[i]) &&
+          !BULLET.test(lines[i]) &&
+          !NUMBERED.test(lines[i])
+        ) {
+          para.push(lines[i]);
+          i++;
+        }
+        html += "<p>" + para.map((l) => inlineMd(escapeHtml(l))).join("<br>") + "</p>";
+      }
+      return html;
+    }
+
+    function addCopyButtons(root) {
+      root.querySelectorAll("pre").forEach((pre) => {
+        const code = pre.querySelector("code");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "copy";
+        btn.textContent = "Копировать";
+        btn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(code ? code.innerText : pre.innerText);
+            btn.textContent = "Скопировано";
+          } catch (err) {
+            btn.textContent = "Не вышло";
+          }
+          setTimeout(() => (btn.textContent = "Копировать"), 1500);
+        });
+        pre.appendChild(btn);
+      });
+    }
+
+    // --- Озвучка (встроенный синтезатор речи браузера) ---
+
+    const hasTTS = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+    let voices = [];
+    if (hasTTS) {
+      voices = speechSynthesis.getVoices();
+      speechSynthesis.onvoiceschanged = () => { voices = speechSynthesis.getVoices(); };
+    }
+
+    // Подсказки по названиям русских голосов (определить пол по-другому браузер не позволяет)
+    const FEMALE_HINTS = /milena|irina|ирина|katya|катя|svetlana|светлана|tatyana|татьяна|alena|алёна|алена|yelena|елена|anna|анна|female|жен/i;
+    const MALE_HINTS = /yuri|юрий|pavel|павел|dmitry|дмитрий|maxim|максим|ivan|иван|aleksandr|александр|(^|\s)male|муж/i;
+
+    function pickVoice(lang, gender) {
+      const list = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith(lang));
+      if (!list.length) return { voice: null, matched: false };
+      const isFemale = (v) => FEMALE_HINTS.test(v.name);
+      const isMale = (v) => !isFemale(v) && MALE_HINTS.test(v.name);
+      const wanted = list.find(gender === "m" ? isMale : isFemale);
+      if (wanted) return { voice: wanted, matched: true };
+      return { voice: list.find((v) => v.default) || list[0], matched: false };
+    }
+
+    // Убираем из текста то, что не стоит читать вслух
+    function speechText(md) {
+      return String(md)
+        .replace(/```[\s\S]*?(```|$)/g, " Здесь блок кода. ")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1")
+        .replace(/https?:\/\/\S+/g, "ссылка")
+        .replace(/^#{1,6}\s+/gm, "")
+        .replace(/\*+/g, "")
+        .replace(/^\s*[-•]\s+/gm, "")
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    // Режем длинный текст на куски, иначе некоторые браузеры замолкают на середине
+    function chunkText(t, max) {
+      const sentences = t.match(/[^.!?…]+[.!?…]*\s*/g) || [t];
+      const chunks = [];
+      let cur = "";
+      for (const s of sentences) {
+        if (cur && (cur + s).length > max) {
+          chunks.push(cur);
+          cur = "";
+        }
+        cur += s;
+      }
+      if (cur) chunks.push(cur);
+      return chunks;
+    }
+
+    function stopSpeaking() {
+      if (hasTTS) speechSynthesis.cancel();
+    }
+
+    // На iPhone озвучка должна начинаться после нажатия пользователем: «разблокируем» её при отправке
+    function unlockSpeech() {
+      if (!hasTTS) return;
+      try {
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        speechSynthesis.speak(u);
+      } catch (err) {}
+    }
+
+    function speak(raw) {
+      if (!hasTTS) return;
+      stopSpeaking();
+      const clean = speechText(raw);
+      if (!clean) return;
+
+      const lang = /[А-Яа-яЁё]/.test(clean) ? "ru" : "en";
+      const p = currentPersona();
+      const { voice, matched } = pickVoice(lang, p.gender);
+
+      for (const part of chunkText(clean, 200)) {
+        const u = new SpeechSynthesisUtterance(part);
+        if (voice) {
+          u.voice = voice;
+          u.lang = voice.lang;
+        } else {
+          u.lang = lang === "ru" ? "ru-RU" : "en-US";
+        }
+        u.rate = (p.voice && p.voice.rate) || 1;
+        u.pitch = (p.voice && p.voice.pitch) || (matched ? 1 : p.gender === "m" ? 0.8 : 1.1);
+        speechSynthesis.speak(u);
+      }
+    }
+
     // --- Сообщения и индикатор ожидания ---
 
     function removeTyping() {
@@ -491,23 +779,64 @@
       }
     }
 
-    // media: { kind: "image" | "audio", preview: адрес для показа } или адрес картинки строкой
+    // Пустое сообщение личности: сюда потом льётся текст
+    function createBotMessage() {
+      const el = document.createElement("div");
+      el.className = "msg bot";
+      const textEl = document.createElement("div");
+      textEl.className = "md";
+      el.appendChild(textEl);
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+      return { el, textEl };
+    }
+
+    // Когда текст готов: картинка, кнопки «Копировать» и 🔊
+    function finishBotMessage(el, textEl, rawText, imageSrc) {
+      if (imageSrc) {
+        const img = document.createElement("img");
+        img.src = imageSrc;
+        img.alt = "изображение";
+        el.insertBefore(img, textEl);
+      }
+      addCopyButtons(textEl);
+      if (hasTTS && rawText && rawText.trim()) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "speak";
+        btn.textContent = "🔊";
+        btn.title = "Озвучить";
+        btn.setAttribute("aria-label", "Озвучить");
+        btn.addEventListener("click", () => speak(rawText));
+        el.appendChild(btn);
+      }
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // media (для сообщений человека): { kind: "image" | "audio", preview: адрес }
+    // media (для сообщений личности): адрес картинки строкой
     function addMessage(cls, text, media) {
       removeTyping(); // точки всегда исчезают перед новым сообщением
+
+      if (cls === "bot") {
+        const { el, textEl } = createBotMessage();
+        textEl.innerHTML = renderMarkdown(text || "");
+        finishBotMessage(el, textEl, text, typeof media === "string" ? media : null);
+        return;
+      }
+
       const div = document.createElement("div");
       div.className = "msg " + cls;
 
       if (media) {
-        const src = typeof media === "string" ? media : media.preview;
-        const kind = typeof media === "string" ? "image" : media.kind;
-        if (kind === "audio") {
+        if (media.kind === "audio") {
           const audio = document.createElement("audio");
           audio.controls = true;
-          audio.src = src;
+          audio.src = media.preview;
           div.appendChild(audio);
         } else {
           const img = document.createElement("img");
-          img.src = src;
+          img.src = media.preview;
           img.alt = "изображение";
           div.appendChild(img);
         }
@@ -547,6 +876,22 @@
         setStatusIdle();
       }
     }
+
+    // --- Меню ---
+
+    function toggleMenu(force) {
+      const open = force !== undefined ? force : menu.hidden;
+      menu.hidden = !open;
+    }
+
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMenu();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!menu.hidden && !menu.contains(e.target)) toggleMenu(false);
+    });
 
     // --- Личности ---
 
@@ -643,6 +988,7 @@
     function selectPersona(id) {
       closePicker();
       if (id === personaId || waiting || recorder) return;
+      stopSpeaking();
       personaId = id;
       try { localStorage.setItem("persona:" + userName, id); } catch (err) {}
       clearPending(true);
@@ -863,6 +1209,7 @@
         alert("Этот браузер не поддерживает запись голоса.");
         return;
       }
+      stopSpeaking(); // чтобы озвучка не попала в запись
       try {
         recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (err) {
@@ -942,10 +1289,13 @@
     async function showApp() {
       loginBox.hidden = true;
       appBox.hidden = false;
+      toggleMenu(false);
       clearPending(true);
       swearOn = loadSwear();
+      ttsOn = loadTts();
       memory = loadMemory();
       updateSwearButton();
+      updateTtsButton();
 
       await loadPersonas(); // при устаревшем пропуске вернёт на экран входа
       if (!token) return;
@@ -992,11 +1342,118 @@
     });
 
     logoutBtn.addEventListener("click", () => {
+      toggleMenu(false);
       stopRecording();
+      stopSpeaking();
       closePicker();
       forgetLogin();
       showLogin();
     });
+
+    // --- Приём ответа потоком ---
+
+    // Читает ответ сервера построчно: каждая строка это одно событие в формате JSON
+    async function readStream(res, onEvent) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      const flushLine = (line) => {
+        line = line.trim();
+        if (!line) return;
+        try {
+          onEvent(JSON.parse(line));
+        } catch (err) {
+          console.error("Не удалось разобрать строку потока", err);
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          flushLine(buf.slice(0, idx));
+          buf = buf.slice(idx + 1);
+        }
+      }
+      flushLine(buf);
+    }
+
+    async function handleStream(res) {
+      let full = "";
+      let msg = null; // { el, textEl }: сообщение личности, в которое льётся текст
+      let image = null;
+      let errorReply = null;
+      let scheduled = false;
+
+      function paint() {
+        scheduled = false;
+        if (!msg) return;
+        const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+        msg.textEl.innerHTML = renderMarkdown(full);
+        if (nearBottom) log.scrollTop = log.scrollHeight;
+      }
+
+      function onEvent(ev) {
+        if (ev.t === "text") {
+          full += ev.d;
+          if (!msg) {
+            removeTyping(); // первое слово: точки уступают место тексту
+            msg = createBotMessage();
+          }
+          if (!scheduled) {
+            scheduled = true;
+            requestAnimationFrame(paint);
+          }
+        } else if (ev.t === "status") {
+          setBusyStatus(ev.d);
+        } else if (ev.t === "done") {
+          image = ev.image || null;
+          if (Array.isArray(ev.memory)) {
+            memory = ev.memory;
+            saveMemory();
+          }
+        } else if (ev.t === "error") {
+          errorReply = ev.reply || "Что-то пошло не так.";
+        }
+      }
+
+      try {
+        await readStream(res, onEvent);
+      } catch (err) {
+        console.error(err);
+        errorReply = errorReply || "Связь прервалась.";
+      }
+
+      const hasText = full.trim().length > 0;
+
+      // Ответ не получен совсем: показываем ошибку, а сообщение убираем из истории
+      if (errorReply && !hasText && !image) {
+        if (msg) msg.el.remove();
+        addMessage("bot", errorReply);
+        chatHistory.pop();
+        saveHistory();
+        return;
+      }
+
+      // Ответ оборвался на середине: оставляем то, что успело прийти
+      if (errorReply) full += (hasText ? "\n\n" : "") + "(ответ оборвался: " + errorReply + ")";
+
+      const imageSrc = image ? "data:" + image.mimeType + ";base64," + image.data : null;
+      if (!msg) {
+        removeTyping();
+        msg = createBotMessage();
+      }
+      msg.textEl.innerHTML = renderMarkdown(full);
+      finishBotMessage(msg.el, msg.textEl, full, imageSrc);
+
+      chatHistory.push({ role: "assistant", content: full });
+      saveHistory();
+
+      if (ttsOn) speak(full);
+    }
 
     // --- Отправка сообщения ---
 
@@ -1022,6 +1479,9 @@
           ? "[голосовое] "
           : "[аудио] "
         : "";
+
+      stopSpeaking();
+      if (ttsOn) unlockSpeech();
 
       input.value = "";
       pendingMedia = null;
@@ -1055,9 +1515,16 @@
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           }),
         });
+
+        // Обычные ответы идут потоком
+        if ((res.headers.get("content-type") || "").includes("application/x-ndjson")) {
+          await handleStream(res);
+          return;
+        }
+
+        // Команды (/память и другие) и ошибки приходят обычным JSON
         const data = await res.json();
 
-        // Сервер прислал обновлённую память (что-то запомнили или забыли)
         if (Array.isArray(data.memory)) {
           memory = data.memory;
           saveMemory();
@@ -1087,6 +1554,7 @@
         chatHistory.push({ role: "assistant", content: data.reply });
         saveHistory();
       } catch (err) {
+        console.error(err);
         addMessage("bot", "Нет связи с сервером. Возможно, вложение слишком большое.");
         chatHistory.pop();
         saveHistory();
@@ -1097,7 +1565,9 @@
     });
 
     clearBtn.addEventListener("click", () => {
+      toggleMenu(false);
       if (!confirm("Удалить переписку с " + currentPersona().name + "?")) return;
+      stopSpeaking();
       chatHistory = [];
       log.innerHTML = "";
       try { localStorage.removeItem(storageKey()); } catch (err) {}
@@ -1119,10 +1589,35 @@
     }
 
     swearBtn.addEventListener("click", () => {
+      toggleMenu(false);
       if (!swearOn && !confirm("Включить мат? Личности будут ругаться по-дружески. Только для взрослых.")) return;
       swearOn = !swearOn;
       try { localStorage.setItem("swear:" + userName, swearOn ? "1" : "0"); } catch (err) {}
       updateSwearButton();
+    });
+
+    // --- Озвучка ответов (включается кнопкой, у каждого человека своя) ---
+
+    function loadTts() {
+      try {
+        return hasTTS && localStorage.getItem("tts:" + userName) === "1";
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function updateTtsButton() {
+      ttsBtn.hidden = !hasTTS;
+      ttsBtn.textContent = ttsOn ? "Озвучка: вкл" : "Озвучка: выкл";
+      ttsBtn.classList.toggle("on", ttsOn);
+    }
+
+    ttsBtn.addEventListener("click", () => {
+      toggleMenu(false);
+      ttsOn = !ttsOn;
+      if (!ttsOn) stopSpeaking();
+      try { localStorage.setItem("tts:" + userName, ttsOn ? "1" : "0"); } catch (err) {}
+      updateTtsButton();
     });
 
     // --- Долгая память (в этом браузере, отдельно для каждого человека, общая для всех личностей) ---
